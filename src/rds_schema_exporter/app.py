@@ -180,6 +180,41 @@ async def api_databases(request: Request):
         return {"databases": [], "error": str(e)}
 
 
+@app.get("/api/browse-dirs")
+async def api_browse_dirs(request: Request):
+    """List subdirectories of a given path for the directory picker."""
+    raw = request.query_params.get("path", "~")
+    try:
+        base = Path(raw).expanduser().resolve()
+        if not base.is_dir():
+            base = base.parent
+        dirs = sorted(
+            [d.name for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")],
+            key=str.lower,
+        )
+        parent = str(base.parent) if base.parent != base else ""
+        return {"path": str(base), "parent": parent, "dirs": dirs}
+    except PermissionError:
+        return {"path": str(base), "parent": str(base.parent), "dirs": [], "error": "Permission denied"}
+    except Exception as e:
+        return {"path": raw, "parent": "", "dirs": [], "error": str(e)}
+
+
+@app.post("/api/create-dir")
+async def api_create_dir(request: Request):
+    """Create a new directory (for the directory picker)."""
+    body = await request.json()
+    raw = body.get("path", "")
+    if not raw:
+        return {"ok": False, "error": "No path provided"}
+    try:
+        target = Path(raw).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(target)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/export")
 async def api_export(request: Request):
     cluster = request.query_params.get("cluster", "")

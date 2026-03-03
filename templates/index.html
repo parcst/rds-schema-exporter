@@ -65,7 +65,10 @@
 
         <div id="local-options">
             <label class="form-label" for="output-path">Output Path</label>
-            <input type="text" id="output-path" placeholder="~/SchemaDump" value="~/SchemaDump">
+            <div class="path-row">
+                <input type="text" id="output-path" placeholder="~/SchemaDump" value="~/SchemaDump">
+                <button type="button" class="btn btn-secondary btn-browse" onclick="openDirBrowser()" title="Browse...">&#128193;</button>
+            </div>
         </div>
 
         <div id="s3-options" style="display: none;">
@@ -138,6 +141,31 @@
         <p>Select a cluster and instance, then click <strong>Export Schema</strong> to begin.</p>
     </div>
 </main>
+
+<!-- Directory Browser Modal -->
+<div id="dir-modal" class="modal-overlay" style="display: none;" onclick="if(event.target===this)closeDirBrowser()">
+    <div class="modal">
+        <div class="modal-header">
+            <h3>Select Directory</h3>
+            <button type="button" class="modal-close" onclick="closeDirBrowser()">&times;</button>
+        </div>
+        <div class="modal-path-bar">
+            <button type="button" class="btn btn-secondary btn-sm" id="dir-up-btn" onclick="dirNavigateUp()" title="Parent directory">&#8593;</button>
+            <input type="text" id="dir-current-path" class="dir-path-input" onkeydown="if(event.key==='Enter')dirNavigateTo(this.value)">
+        </div>
+        <div id="dir-list" class="dir-list"></div>
+        <div class="modal-actions">
+            <div id="dir-new-row" class="dir-new-row">
+                <input type="text" id="dir-new-name" placeholder="New folder name..." class="dir-new-input" onkeydown="if(event.key==='Enter')createDir()">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="createDir()">Create</button>
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="closeDirBrowser()">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="selectDir()">Select</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -659,6 +687,100 @@ function shortenPath(path) {
         return '.../' + parts.slice(-4).join('/');
     }
     return path;
+}
+
+/* ─── Directory Browser ─── */
+let dirBrowserPath = '';
+
+function openDirBrowser() {
+    const current = document.getElementById('output-path').value || '~';
+    document.getElementById('dir-modal').style.display = '';
+    dirNavigateTo(current);
+}
+
+function closeDirBrowser() {
+    document.getElementById('dir-modal').style.display = 'none';
+}
+
+function dirNavigateTo(path) {
+    const list = document.getElementById('dir-list');
+    list.innerHTML = '<div class="dir-loading"><span class="spinner"></span> Loading...</div>';
+
+    fetch(`/api/browse-dirs?path=${encodeURIComponent(path)}`)
+        .then(r => r.json())
+        .then(data => {
+            dirBrowserPath = data.path;
+            document.getElementById('dir-current-path').value = data.path;
+            document.getElementById('dir-up-btn').disabled = !data.parent;
+
+            if (data.error) {
+                list.innerHTML = '<div class="dir-error">' + escapeHtml(data.error) + '</div>';
+                return;
+            }
+
+            if (data.dirs.length === 0) {
+                list.innerHTML = '<div class="dir-empty">No subdirectories</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            for (const name of data.dirs) {
+                const item = document.createElement('div');
+                item.className = 'dir-item';
+                item.innerHTML = '<span class="dir-icon">&#128193;</span> ' + escapeHtml(name);
+                item.addEventListener('dblclick', function() {
+                    dirNavigateTo(dirBrowserPath + '/' + name);
+                });
+                item.addEventListener('click', function() {
+                    list.querySelectorAll('.dir-item').forEach(i => i.classList.remove('selected'));
+                    item.classList.add('selected');
+                });
+                list.appendChild(item);
+            }
+        })
+        .catch(err => {
+            list.innerHTML = '<div class="dir-error">Failed to load: ' + escapeHtml(String(err)) + '</div>';
+        });
+}
+
+function dirNavigateUp() {
+    fetch(`/api/browse-dirs?path=${encodeURIComponent(dirBrowserPath)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.parent) dirNavigateTo(data.parent);
+        });
+}
+
+function createDir() {
+    const name = document.getElementById('dir-new-name').value.trim();
+    if (!name) return;
+    const newPath = dirBrowserPath + '/' + name;
+    fetch(`/api/create-dir`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: newPath}),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                document.getElementById('dir-new-name').value = '';
+                dirNavigateTo(dirBrowserPath);
+            } else {
+                alert(data.error || 'Failed to create directory');
+            }
+        })
+        .catch(err => alert('Failed to create directory: ' + err));
+}
+
+function selectDir() {
+    const selected = document.querySelector('.dir-item.selected');
+    let path = dirBrowserPath;
+    if (selected) {
+        const name = selected.textContent.trim();
+        path = dirBrowserPath + '/' + name;
+    }
+    document.getElementById('output-path').value = path;
+    closeDirBrowser();
 }
 
 /* ─── Cleanup on page unload ─── */

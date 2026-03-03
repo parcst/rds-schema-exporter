@@ -52,6 +52,8 @@ pip install -e ".[web,dev]"
 | GET | `/api/login-status?cluster=X` | HTMX polled every 2s, returns login_status partial |
 | GET | `/api/instances?cluster=X` | JSON list of MySQL instances on cluster |
 | GET | `/api/databases?cluster&instance` | JSON list of databases on an instance (opens tunnel) |
+| GET | `/api/browse-dirs?path=X` | JSON list of subdirectories for directory picker |
+| POST | `/api/create-dir` | Create a new directory (directory picker) |
 | GET | `/api/export?cluster&instance&...` | SSE stream of export events |
 | POST | `/api/shutdown` | Tunnel cleanup on page unload (sendBeacon) |
 

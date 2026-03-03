@@ -721,6 +721,168 @@ input[type="text"]::placeholder {
     font-size: 13px;
 }
 
+/* ─── Path Row (input + browse button) ─── */
+.path-row {
+    display: flex;
+    gap: 6px;
+}
+
+.path-row input[type="text"] {
+    flex: 1;
+}
+
+.btn-browse {
+    padding: 6px 10px;
+    font-size: 16px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* ─── Modal ─── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(2px);
+}
+
+.modal {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    width: 560px;
+    max-width: 90vw;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.modal-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--color-text-muted);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    color: var(--color-text);
+}
+
+.modal-path-bar {
+    display: flex;
+    gap: 6px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.dir-path-input {
+    flex: 1;
+    font-family: monospace;
+    font-size: 12px !important;
+}
+
+.btn-sm {
+    padding: 6px 10px;
+    font-size: 13px;
+}
+
+/* ─── Directory List ─── */
+.dir-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    min-height: 200px;
+    max-height: 320px;
+}
+
+.dir-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: monospace;
+    cursor: pointer;
+    transition: background 0.1s;
+    user-select: none;
+}
+
+.dir-item:hover {
+    background: var(--color-surface-2);
+}
+
+.dir-item.selected {
+    background: var(--color-accent);
+    color: white;
+}
+
+.dir-icon {
+    font-size: 15px;
+    flex-shrink: 0;
+}
+
+.dir-loading, .dir-empty, .dir-error {
+    padding: 20px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.dir-error {
+    color: var(--color-error);
+}
+
+/* ─── Modal Actions ─── */
+.modal-actions {
+    padding: 12px 20px;
+    border-top: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dir-new-row {
+    display: flex;
+    gap: 6px;
+}
+
+.dir-new-input {
+    flex: 1;
+    font-size: 12px !important;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 /* ─── Scrollbar (Webkit) ─── */
 ::-webkit-scrollbar {
     width: 8px;

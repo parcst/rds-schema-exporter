@@ -168,7 +168,7 @@ def run_export(config: Config) -> RunReport:
                 db_names, "Select an RDS instance", allow_all=True
             )
 
-            db_user = get_logged_in_user(tsh)
+            db_user = get_logged_in_user(tsh, cluster)
 
             if choice == ALL_SENTINEL:
                 # --- Export every database sequentially ---
@@ -179,7 +179,7 @@ def run_export(config: Config) -> RunReport:
                         "Exporting %d/%d: %s ...", idx, len(databases), name
                     )
                     try:
-                        tunnel = start_tunnel(tsh, name, db_user)
+                        tunnel = start_tunnel(tsh, name, db_user, cluster=cluster)
                         config.connection.host = tunnel.host
                         config.connection.port = tunnel.port
                         config.connection.user = db_user
@@ -218,7 +218,7 @@ def run_export(config: Config) -> RunReport:
 
             # --- Single database selected ---
             selected_db = next(d for d in databases if d["name"] == choice)
-            tunnel = start_tunnel(tsh, choice, db_user)
+            tunnel = start_tunnel(tsh, choice, db_user, cluster=cluster)
 
             # Override connection config with tunnel details
             config.connection.host = tunnel.host

@@ -86,3 +86,30 @@ def run(
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Bind address.")
+@click.option("--port", default=8002, type=int, help="Port number.")
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
+def web(host: str, port: int, reload: bool) -> None:
+    """Start the web UI server."""
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        click.echo(
+            "Web dependencies not installed. Run:\n"
+            '  pip install -e ".[web]"',
+            err=True,
+        )
+        sys.exit(1)
+
+    import uvicorn
+
+    click.echo(f"Starting RDS Schema Exporter web UI at http://{host}:{port}")
+    uvicorn.run(
+        "rds_schema_exporter.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )

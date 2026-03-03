@@ -1,0 +1,671 @@
+{% extends "base.html" %}
+
+{% block content %}
+<aside class="sidebar">
+    <div class="sidebar-section">
+        <h3 class="sidebar-heading">Connection</h3>
+
+        <label class="form-label" for="cluster">Cluster</label>
+        <div class="cluster-row">
+            <select name="cluster" id="cluster">
+                <option value="">Select cluster...</option>
+                {% for c in clusters %}
+                <option value="{{ c }}">{{ c }}</option>
+                {% endfor %}
+            </select>
+            <button type="button" id="login-btn"
+                    hx-post="/api/login"
+                    hx-include="#cluster"
+                    hx-target="#login-status"
+                    hx-swap="innerHTML"
+                    class="btn btn-secondary">
+                Login
+            </button>
+        </div>
+        <div id="login-status">
+            {% if username %}
+            <div class="login-status login-success">
+                Logged in as <strong>{{ username }}</strong>
+            </div>
+            {% endif %}
+        </div>
+
+        <label class="form-label" for="instance">Instance</label>
+        <select name="instance" id="instance" disabled>
+            <option value="">Login first...</option>
+        </select>
+
+        <label class="checkbox-label">
+            <input type="checkbox" id="all-instances"> Export all instances
+        </label>
+
+        <label class="form-label" for="database">Database</label>
+        <select name="database" id="database" disabled>
+            <option value="">Select instance first...</option>
+        </select>
+        <div id="db-loading" style="display: none;">
+            <span class="inline-loading"><span class="spinner"></span> Loading databases...</span>
+        </div>
+
+        <label class="checkbox-label">
+            <input type="checkbox" id="db-all-user" checked> All user databases
+        </label>
+        <label class="checkbox-label">
+            <input type="checkbox" id="db-all"> All databases (incl. system)
+        </label>
+    </div>
+
+    <div class="sidebar-section">
+        <h3 class="sidebar-heading">Output</h3>
+
+        <div class="toggle-group">
+            <button type="button" class="toggle-btn active" data-target="local" onclick="setOutputTarget('local')">Local</button>
+            <button type="button" class="toggle-btn" data-target="s3" onclick="setOutputTarget('s3')">S3</button>
+        </div>
+
+        <div id="local-options">
+            <label class="form-label" for="output-path">Output Path</label>
+            <input type="text" id="output-path" placeholder="~/SchemaDump" value="~/SchemaDump">
+        </div>
+
+        <div id="s3-options" style="display: none;">
+            <label class="form-label" for="bucket">S3 Bucket</label>
+            <input type="text" id="bucket" placeholder="my-bucket">
+            <label class="form-label" for="s3-prefix">S3 Prefix</label>
+            <input type="text" id="s3-prefix" placeholder="schemas/">
+        </div>
+    </div>
+
+    <div class="sidebar-section">
+        <h3 class="sidebar-heading">Options</h3>
+
+        <label class="checkbox-label">
+            <input type="checkbox" id="strip-auto-increment" checked> Strip AUTO_INCREMENT
+        </label>
+    </div>
+
+    <div class="sidebar-actions">
+        <button type="button" class="btn btn-primary" id="export-btn" onclick="startExport()">
+            Export Schema
+        </button>
+        <button type="button" class="btn btn-cancel" id="cancel-btn" onclick="cancelExport()" style="display: none;">
+            Stop Export
+        </button>
+    </div>
+</aside>
+
+<main class="main-content">
+    <div id="summary-area"></div>
+
+    <div id="progress-section" style="display: none;">
+        <div class="progress-wrapper">
+            <div class="step-status" id="step-text">
+                <span class="spinner"></span>
+                <span id="step-message">Preparing...</span>
+            </div>
+            <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progress-bar" style="width: 0%"></div>
+            </div>
+            <div id="object-progress" class="object-progress" style="display: none;">
+                <div class="object-progress-header">
+                    <span id="object-progress-label">Exporting objects...</span>
+                    <span id="object-progress-count" class="object-progress-count"></span>
+                </div>
+                <div class="progress-bar-track progress-bar-sm">
+                    <div class="progress-bar-fill progress-bar-objects" id="object-progress-bar" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="progress-stats" id="progress-stats"></div>
+        </div>
+    </div>
+
+    <div id="results-section" style="display: none;">
+        <h3 class="section-heading">Results</h3>
+        <div id="results-tree" class="results-tree"></div>
+    </div>
+
+    <div id="errors-section" style="display: none;">
+        <div class="error-panel">
+            <h3 class="error-panel-header" id="errors-toggle" onclick="toggleErrors()">
+                Errors <span class="toggle-icon">&#9660;</span>
+            </h3>
+            <div id="errors-list" class="errors-list"></div>
+        </div>
+    </div>
+
+    <div id="empty-state" class="empty-state">
+        <div class="empty-icon">&#128193;</div>
+        <p>Select a cluster and instance, then click <strong>Export Schema</strong> to begin.</p>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let eventSource = null;
+let outputTarget = 'local';
+
+/* ─── Output Toggle ─── */
+function setOutputTarget(target) {
+    outputTarget = target;
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.toggle-btn[data-target="${target}"]`).classList.add('active');
+    document.getElementById('local-options').style.display = target === 'local' ? '' : 'none';
+    document.getElementById('s3-options').style.display = target === 's3' ? '' : 'none';
+}
+
+/* ─── Instance Loading ─── */
+document.getElementById('cluster').addEventListener('change', function() {
+    // Reset instance dropdown when cluster changes
+    const instSel = document.getElementById('instance');
+    instSel.innerHTML = '<option value="">Loading instances...</option>';
+    instSel.disabled = true;
+    // Reset database dropdown
+    resetDatabaseDropdown();
+});
+
+// After successful login, load instances
+const observer = new MutationObserver(function() {
+    const status = document.querySelector('.login-success');
+    if (status) {
+        loadInstances();
+    }
+});
+observer.observe(document.getElementById('login-status'), { childList: true, subtree: true });
+
+function loadInstances() {
+    const cluster = document.getElementById('cluster').value;
+    if (!cluster) return;
+
+    fetch(`/api/instances?cluster=${encodeURIComponent(cluster)}`)
+        .then(r => r.json())
+        .then(data => {
+            const sel = document.getElementById('instance');
+            sel.innerHTML = '<option value="">Select instance...</option>';
+            (data.instances || []).forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            });
+            sel.disabled = false;
+        })
+        .catch(err => {
+            console.error('Failed to load instances:', err);
+        });
+}
+
+/* ─── All Instances Toggle ─── */
+document.getElementById('all-instances').addEventListener('change', function() {
+    document.getElementById('instance').disabled = this.checked;
+    if (this.checked) {
+        resetDatabaseDropdown();
+    }
+});
+
+/* ─── Database Loading ─── */
+document.getElementById('instance').addEventListener('change', function() {
+    const cluster = document.getElementById('cluster').value;
+    const instance = this.value;
+    resetDatabaseDropdown();
+    if (cluster && instance) {
+        loadDatabases(cluster, instance);
+    }
+});
+
+function resetDatabaseDropdown() {
+    const sel = document.getElementById('database');
+    sel.innerHTML = '<option value="">Select instance first...</option>';
+    sel.disabled = true;
+    document.getElementById('db-loading').style.display = 'none';
+}
+
+function loadDatabases(cluster, instance) {
+    const sel = document.getElementById('database');
+    const loading = document.getElementById('db-loading');
+    sel.innerHTML = '<option value="">Loading...</option>';
+    sel.disabled = true;
+    loading.style.display = '';
+
+    fetch(`/api/databases?cluster=${encodeURIComponent(cluster)}&instance=${encodeURIComponent(instance)}`)
+        .then(r => r.json())
+        .then(data => {
+            loading.style.display = 'none';
+            sel.innerHTML = '<option value="">Select database...</option>';
+            (data.databases || []).forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            });
+            sel.disabled = document.getElementById('db-all-user').checked || document.getElementById('db-all').checked;
+            if (data.error) {
+                sel.innerHTML = '<option value="">Failed to load</option>';
+                console.error('Database load error:', data.error);
+            }
+        })
+        .catch(err => {
+            loading.style.display = 'none';
+            sel.innerHTML = '<option value="">Failed to load</option>';
+            console.error('Failed to load databases:', err);
+        });
+}
+
+/* ─── Database Mode ─── */
+function onDbModeChange(e) {
+    const allUser = document.getElementById('db-all-user');
+    const allDbs = document.getElementById('db-all');
+    const dbSel = document.getElementById('database');
+    const changed = e.target;
+
+    // Radio-like: checking one unchecks the other
+    if (changed === allDbs && allDbs.checked) {
+        allUser.checked = false;
+    } else if (changed === allUser && allUser.checked) {
+        allDbs.checked = false;
+    }
+
+    // Enable database dropdown only when both checkboxes are unchecked
+    const eitherChecked = allUser.checked || allDbs.checked;
+    // Only enable if databases have been loaded (more than just the placeholder)
+    const hasOptions = dbSel.options.length > 1;
+    dbSel.disabled = eitherChecked || !hasOptions;
+}
+
+document.getElementById('db-all-user').addEventListener('change', onDbModeChange);
+document.getElementById('db-all').addEventListener('change', onDbModeChange);
+
+/* ─── Export SSE ─── */
+function startExport() {
+    const cluster = document.getElementById('cluster').value;
+    const instance = document.getElementById('instance').value;
+    const allInstances = document.getElementById('all-instances').checked;
+
+    if (!cluster) { alert('Select a cluster first.'); return; }
+    if (!allInstances && !instance) { alert('Select an instance or check "Export all instances".'); return; }
+
+    // Build query params
+    const params = new URLSearchParams();
+    params.set('cluster', cluster);
+    if (allInstances) {
+        params.set('all', 'true');
+    } else {
+        params.set('instance', instance);
+    }
+    params.set('output', outputTarget);
+    if (outputTarget === 'local') {
+        params.set('output_path', document.getElementById('output-path').value);
+    } else {
+        params.set('bucket', document.getElementById('bucket').value);
+        params.set('s3_prefix', document.getElementById('s3-prefix').value);
+    }
+    // Database mode
+    const allUserDbs = document.getElementById('db-all-user').checked;
+    const allDbs = document.getElementById('db-all').checked;
+    if (allDbs) {
+        params.set('db_mode', 'all');
+    } else if (allUserDbs) {
+        params.set('db_mode', 'user');
+    } else {
+        const selectedDb = document.getElementById('database').value;
+        if (!selectedDb) { alert('Select a database or check a databases option.'); return; }
+        params.set('db_mode', 'specific');
+        params.set('databases', selectedDb);
+    }
+    params.set('strip_auto_increment', document.getElementById('strip-auto-increment').checked ? 'true' : 'false');
+
+    // Close any leftover connection
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+
+    // Reset UI — restore step-text structure first (cancel/done may have replaced it)
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('summary-area').innerHTML = '';
+    document.getElementById('progress-section').style.display = '';
+    document.getElementById('step-text').innerHTML =
+        '<span class="spinner"></span><span id="step-message">Preparing...</span>';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-bar').classList.remove('done');
+    document.getElementById('progress-stats').innerHTML = '';
+    document.getElementById('results-section').style.display = '';
+    document.getElementById('results-tree').innerHTML = '';
+    document.getElementById('errors-section').style.display = 'none';
+    document.getElementById('errors-list').innerHTML = '';
+    document.getElementById('export-btn').disabled = true;
+    document.getElementById('cancel-btn').style.display = '';
+
+    // Track state
+    const treeState = {};
+
+    // Open SSE
+    eventSource = new EventSource('/api/export?' + params.toString());
+
+    eventSource.addEventListener('step', function(e) {
+        const data = JSON.parse(e.data);
+        document.getElementById('step-message').textContent = data.message;
+    });
+
+    eventSource.addEventListener('instance_start', function(e) {
+        const data = JSON.parse(e.data);
+        updateProgress(data.current_instance, data.total_instances);
+
+        // Add instance node to tree
+        if (!treeState[data.instance_name]) {
+            treeState[data.instance_name] = { databases: {} };
+            const node = createInstanceNode(data.instance_name);
+            document.getElementById('results-tree').appendChild(node);
+        }
+    });
+
+    eventSource.addEventListener('database_start', function(e) {
+        const data = JSON.parse(e.data);
+        document.getElementById('step-message').textContent =
+            `${data.instance_name} — ${data.database_name} (db ${data.current_database}/${data.total_databases})`;
+
+        // Reset object progress for new database
+        const objProgress = document.getElementById('object-progress');
+        objProgress.style.display = '';
+        document.getElementById('object-progress-label').textContent =
+            `${data.database_name} — extracting...`;
+        document.getElementById('object-progress-count').textContent = '';
+        document.getElementById('object-progress-bar').style.width = '0%';
+        document.getElementById('object-progress-bar').classList.remove('done');
+
+        // Add database node to instance
+        const instState = treeState[data.instance_name];
+        if (instState && !instState.databases[data.database_name]) {
+            instState.databases[data.database_name] = { types: {} };
+            const instNode = document.getElementById('inst-' + css(data.instance_name));
+            if (instNode) {
+                const dbNode = createDatabaseNode(data.instance_name, data.database_name);
+                instNode.querySelector('.tree-children').appendChild(dbNode);
+            }
+        }
+    });
+
+    eventSource.addEventListener('object_extracted', function(e) {
+        const data = JSON.parse(e.data);
+        updateProgressStats(data.total_objects, data.object_counts);
+
+        // Update object progress bar (now tracks type steps, e.g. 3/7)
+        const cur = data.current_object_in_db;
+        const total = data.total_objects_in_db;
+        if (total > 0) {
+            const pct = Math.round(cur / total * 100);
+            document.getElementById('object-progress-bar').style.width = pct + '%';
+            const batchCount = (data.batch_objects || []).length;
+            document.getElementById('object-progress-count').textContent =
+                `${data.object_type}: ${batchCount} objects (step ${cur}/${total})`;
+            document.getElementById('object-progress-label').textContent =
+                `${data.database_name} — ${data.object_type}`;
+        }
+
+        // Process batch of objects for the tree
+        const objects = data.batch_objects || [];
+        if (objects.length === 0) return;
+
+        const instState = treeState[data.instance_name];
+        if (!instState) return;
+        const dbState = instState.databases[data.database_name];
+        if (!dbState) return;
+
+        // Ensure type group exists
+        if (!dbState.types[data.object_type]) {
+            dbState.types[data.object_type] = 0;
+            const dbNode = document.getElementById('db-' + css(data.instance_name) + '-' + css(data.database_name));
+            if (dbNode) {
+                const typeNode = createTypeNode(data.instance_name, data.database_name, data.object_type);
+                dbNode.querySelector('.tree-children').appendChild(typeNode);
+            }
+        }
+
+        // Add all objects from the batch at once
+        const typeId = 'type-' + css(data.instance_name) + '-' + css(data.database_name) + '-' + css(data.object_type);
+        const typeNode = document.getElementById(typeId);
+        const fragment = document.createDocumentFragment();
+        for (const obj of objects) {
+            dbState.types[data.object_type]++;
+            const leaf = document.createElement('div');
+            leaf.className = 'tree-leaf';
+            leaf.innerHTML = '<span class="leaf-name">' + escapeHtml(obj.name) + '</span>' +
+                '<span class="leaf-path" title="' + escapeAttr(obj.path) + '">' + escapeHtml(shortenPath(obj.path)) + '</span>';
+            fragment.appendChild(leaf);
+        }
+        if (typeNode) {
+            typeNode.querySelector('.tree-count').textContent = dbState.types[data.object_type];
+            typeNode.querySelector('.tree-children').appendChild(fragment);
+        }
+    });
+
+    eventSource.addEventListener('database_done', function(e) {
+        const data = JSON.parse(e.data);
+        const dbId = 'db-' + css(data.instance_name) + '-' + css(data.database_name);
+        const dbNode = document.getElementById(dbId);
+        if (dbNode) {
+            dbNode.querySelector('.tree-label').classList.add('tree-done');
+        }
+
+        // Mark object progress complete for this database
+        document.getElementById('object-progress-bar').style.width = '100%';
+        document.getElementById('object-progress-bar').classList.add('done');
+        document.getElementById('object-progress-label').textContent =
+            `${data.database_name} — done`;
+    });
+
+    eventSource.addEventListener('instance_done', function(e) {
+        const data = JSON.parse(e.data);
+        const instId = 'inst-' + css(data.instance_name);
+        const instNode = document.getElementById(instId);
+        if (instNode) {
+            instNode.querySelector('.tree-label').classList.add('tree-done');
+            const badge = instNode.querySelector('.tree-badge');
+            if (badge) {
+                badge.className = 'tree-badge badge-success';
+                badge.textContent = 'Done';
+            }
+        }
+        updateProgressStats(data.total_objects, data.object_counts);
+    });
+
+    eventSource.addEventListener('instance_error', function(e) {
+        const data = JSON.parse(e.data);
+        const instId = 'inst-' + css(data.instance_name);
+        const instNode = document.getElementById(instId);
+        if (instNode) {
+            const badge = instNode.querySelector('.tree-badge');
+            if (badge) {
+                badge.className = 'tree-badge badge-error';
+                badge.textContent = 'Error';
+            }
+        }
+
+        // Add to errors panel
+        document.getElementById('errors-section').style.display = '';
+        const errorItem = document.createElement('div');
+        errorItem.className = 'error-item';
+        errorItem.innerHTML = '<strong>' + escapeHtml(data.instance_name) + '</strong>: ' + escapeHtml(data.message);
+        document.getElementById('errors-list').appendChild(errorItem);
+    });
+
+    eventSource.addEventListener('done', function(e) {
+        const data = JSON.parse(e.data);
+
+        // Show summary
+        document.getElementById('summary-area').innerHTML = data.summary_html;
+
+        // Mark progress as complete
+        document.getElementById('progress-bar').style.width = '100%';
+        document.getElementById('progress-bar').classList.add('done');
+        document.getElementById('object-progress').style.display = 'none';
+        document.getElementById('step-text').innerHTML =
+            '<span class="step-complete">Export complete — ' + data.total_objects + ' objects exported</span>';
+
+        cleanup();
+    });
+
+    eventSource.addEventListener('error', function(e) {
+        if (eventSource && eventSource.readyState === EventSource.CLOSED) return;
+
+        try {
+            if (e.data) {
+                let msg = e.data;
+                try {
+                    const data = JSON.parse(e.data);
+                    msg = data.message || e.data;
+                } catch (_) { /* plain text error from server */ }
+                document.getElementById('errors-section').style.display = '';
+                const errorItem = document.createElement('div');
+                errorItem.className = 'error-item error-critical';
+                errorItem.innerHTML = escapeHtml(msg);
+                document.getElementById('errors-list').appendChild(errorItem);
+            }
+        } catch (_) { /* safety net */ }
+
+        document.getElementById('step-text').innerHTML =
+            '<span class="step-error">Export failed</span>';
+        cleanup();
+    });
+
+    eventSource.onerror = function() {
+        cleanup();
+    };
+}
+
+function cancelExport() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    document.getElementById('step-text').innerHTML =
+        '<span class="step-cancelled">Export cancelled</span>';
+    cleanup();
+}
+
+function cleanup() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    document.getElementById('export-btn').disabled = false;
+    document.getElementById('cancel-btn').style.display = 'none';
+}
+
+/* ─── Progress Helpers ─── */
+function updateProgress(current, total) {
+    if (total > 0) {
+        const pct = Math.round((current - 1) / total * 100);
+        document.getElementById('progress-bar').style.width = pct + '%';
+    }
+}
+
+function updateProgressStats(totalObjects, objectCounts) {
+    let html = '<span class="stat">Objects: <strong>' + totalObjects + '</strong></span>';
+    for (const [type, count] of Object.entries(objectCounts)) {
+        html += ' <span class="stat stat-dim">' + type + ': ' + count + '</span>';
+    }
+    document.getElementById('progress-stats').innerHTML = html;
+}
+
+/* ─── Tree Node Builders ─── */
+function createInstanceNode(name) {
+    const div = document.createElement('div');
+    div.className = 'tree-node tree-instance';
+    div.id = 'inst-' + css(name);
+    div.innerHTML =
+        '<div class="tree-label" onclick="toggleTree(this)">' +
+            '<span class="tree-toggle">&#9660;</span>' +
+            '<span class="tree-icon">&#128187;</span> ' +
+            '<span class="tree-name">' + escapeHtml(name) + '</span>' +
+            '<span class="tree-badge badge-running">Running</span>' +
+        '</div>' +
+        '<div class="tree-children"></div>';
+    return div;
+}
+
+function createDatabaseNode(instName, dbName) {
+    const div = document.createElement('div');
+    div.className = 'tree-node tree-database';
+    div.id = 'db-' + css(instName) + '-' + css(dbName);
+    div.innerHTML =
+        '<div class="tree-label" onclick="toggleTree(this)">' +
+            '<span class="tree-toggle">&#9660;</span>' +
+            '<span class="tree-icon">&#128451;</span> ' +
+            '<span class="tree-name">' + escapeHtml(dbName) + '</span>' +
+        '</div>' +
+        '<div class="tree-children"></div>';
+    return div;
+}
+
+function createTypeNode(instName, dbName, typeName) {
+    const id = 'type-' + css(instName) + '-' + css(dbName) + '-' + css(typeName);
+    const div = document.createElement('div');
+    div.className = 'tree-node tree-type';
+    div.id = id;
+    div.innerHTML =
+        '<div class="tree-label" onclick="toggleTree(this)">' +
+            '<span class="tree-toggle">&#9654;</span>' +
+            '<span class="tree-icon">&#128196;</span> ' +
+            '<span class="tree-name">' + escapeHtml(typeName) + '</span>' +
+            '<span class="tree-count">0</span>' +
+        '</div>' +
+        '<div class="tree-children" style="display: none;"></div>';
+    return div;
+}
+
+function toggleTree(label) {
+    const children = label.nextElementSibling;
+    const toggle = label.querySelector('.tree-toggle');
+    if (children.style.display === 'none') {
+        children.style.display = '';
+        toggle.innerHTML = '&#9660;';
+    } else {
+        children.style.display = 'none';
+        toggle.innerHTML = '&#9654;';
+    }
+}
+
+function toggleErrors() {
+    const list = document.getElementById('errors-list');
+    const icon = document.querySelector('#errors-toggle .toggle-icon');
+    if (list.style.display === 'none') {
+        list.style.display = '';
+        icon.innerHTML = '&#9660;';
+    } else {
+        list.style.display = 'none';
+        icon.innerHTML = '&#9654;';
+    }
+}
+
+/* ─── Utility ─── */
+function css(str) {
+    return str.replace(/[^a-zA-Z0-9-]/g, '_');
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function escapeAttr(str) {
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function shortenPath(path) {
+    const parts = path.split('/');
+    if (parts.length > 4) {
+        return '.../' + parts.slice(-4).join('/');
+    }
+    return path;
+}
+
+/* ─── Cleanup on page unload ─── */
+window.addEventListener('beforeunload', function() {
+    if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/shutdown');
+    }
+});
+</script>
+{% endblock %}

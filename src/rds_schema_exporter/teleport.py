@@ -82,25 +82,44 @@ def get_clusters(tsh: str) -> list[str]:
     return clusters
 
 
-def get_logged_in_user(tsh: str) -> str:
-    """Return the username from ``tsh status --format=json``."""
+def get_logged_in_user(tsh: str, cluster: str | None = None) -> str:
+    """Return the username from ``tsh status --format=json``.
+
+    Note: ``tsh status`` returns exit code 1 even when logged in, so we
+    must **never** use ``check=True``.  Instead we capture stdout regardless
+    of the exit code and parse the JSON.
+    """
     result = subprocess.run(
         [tsh, "status", "--format=json"],
         capture_output=True,
         text=True,
-        check=True,
     )
-    status = json.loads(result.stdout)
-
-    # tsh status returns an object with 'active' key
-    username: str = ""
-    if isinstance(status, dict):
-        # Try common locations for username
-        username = (
-            status.get("active", {}).get("username", "")
-            or status.get("username", "")
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError(
+            "Could not determine Teleport username from 'tsh status'. "
+            "Are you logged in?"
         )
 
+    status = json.loads(stdout)
+
+    # Check the active profile first
+    active = status.get("active", {}) if isinstance(status, dict) else {}
+    if not cluster or active.get("cluster", "") == cluster:
+        username = active.get("username", "")
+        if username:
+            return username
+
+    # Fall back to inactive profiles for the requested cluster
+    if cluster and isinstance(status, dict):
+        for profile in status.get("profiles", []):
+            if profile.get("cluster", "") == cluster and profile.get("username", ""):
+                return profile["username"]
+
+    # Last resort: return whatever active gives us
+    username = active.get("username", "") or (
+        status.get("username", "") if isinstance(status, dict) else ""
+    )
     if not username:
         raise RuntimeError(
             "Could not determine Teleport username from 'tsh status'. "
@@ -121,7 +140,7 @@ def list_mysql_databases(tsh: str, cluster: str) -> list[dict[str, str]]:
     ``name``, ``uri``, ``account_id``, ``region``, ``instance_id``.
     """
     result = subprocess.run(
-        [tsh, "db", "ls", f"--cluster={cluster}", "--format=json"],
+        [tsh, "db", "ls", f"--proxy={cluster}", "--format=json"],
         capture_output=True,
         text=True,
         check=True,
@@ -207,24 +226,33 @@ def interactive_select(
 # ---------------------------------------------------------------------------
 
 
-def start_tunnel(tsh: str, db_name: str, db_user: str) -> TeleportTunnel:
+def start_tunnel(
+    tsh: str,
+    db_name: str,
+    db_user: str,
+    *,
+    cluster: str | None = None,
+) -> TeleportTunnel:
     """Log in to *db_name* and start a local tunnel.
 
-    1. ``tsh db login <db_name> --db-user=<db_user>``
-    2. ``tsh proxy db --tunnel --port 0 <db_name>`` (background)
+    1. ``tsh db login <db_name> --db-user=<db_user> [--proxy=<cluster>]``
+    2. ``tsh proxy db --tunnel --port 0 <db_name> [--proxy=<cluster>]`` (background)
     3. Parse stdout for the listening port.
     """
+    cluster_args = [f"--proxy={cluster}"] if cluster else []
+
     # Step 1: authenticate
     logger.info("Logging in to database %s as %s ...", db_name, db_user)
     subprocess.run(
-        [tsh, "db", "login", db_name, f"--db-user={db_user}"],
+        [tsh, "db", "login", db_name, f"--db-user={db_user}", *cluster_args],
         check=True,
+        capture_output=True,
     )
 
     # Step 2: start tunnel
     logger.info("Starting tunnel for %s ...", db_name)
     proc = subprocess.Popen(
-        [tsh, "proxy", "db", "--tunnel", "--port", "0", db_name],
+        [tsh, "proxy", "db", "--tunnel", "--port", "0", db_name, *cluster_args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -268,6 +296,50 @@ def _wait_for_tunnel_port(proc: subprocess.Popen) -> int:  # type: ignore[type-a
     raise RuntimeError(
         f"Timed out waiting for tsh tunnel port. Output:\n{collected}"
     )
+
+
+def login_to_cluster(tsh: str, cluster: str) -> subprocess.Popen:  # type: ignore[type-arg]
+    """Spawn ``tsh login <cluster>`` for SSO and return the process handle.
+
+    The caller should poll :func:`check_cluster_login` to detect when SSO
+    completes.
+    """
+    return subprocess.Popen(
+        [tsh, "login", cluster],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def check_cluster_login(tsh: str, cluster: str) -> tuple[bool, str]:
+    """Check if the user is logged into *cluster*.
+
+    Parses ``tsh status --format=json`` and verifies the active or inactive
+    profiles match.  Returns ``(logged_in, username)``.
+    """
+    result = subprocess.run(
+        [tsh, "status", "--format=json"],
+        capture_output=True,
+        text=True,
+    )
+    if not result.stdout.strip():
+        return False, ""
+
+    status = json.loads(result.stdout)
+
+    # Check active profile first
+    active = status.get("active", {}) if isinstance(status, dict) else {}
+    if active.get("cluster", "") == cluster and active.get("username", ""):
+        return True, active["username"]
+
+    # Check inactive profiles
+    if isinstance(status, dict):
+        for profile in status.get("profiles", []):
+            if profile.get("cluster", "") == cluster and profile.get("username", ""):
+                return True, profile["username"]
+
+    return False, ""
 
 
 def stop_tunnel(tsh: str, tunnel: TeleportTunnel) -> None:

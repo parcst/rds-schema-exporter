@@ -1,0 +1,32 @@
+<div class="summary-bar {% if success %}summary-success{% else %}summary-error{% endif %}">
+    <div class="summary-stats">
+        <div class="summary-stat">
+            <span class="summary-label">Status</span>
+            <span class="summary-value">{% if success %}Complete{% else %}Failed{% endif %}</span>
+        </div>
+        <div class="summary-stat">
+            <span class="summary-label">Total Objects</span>
+            <span class="summary-value">{{ total_objects }}</span>
+        </div>
+        {% for type_name, count in object_counts.items() %}
+        <div class="summary-stat">
+            <span class="summary-label">{{ type_name | capitalize }}</span>
+            <span class="summary-value">{{ count }}</span>
+        </div>
+        {% endfor %}
+        <div class="summary-stat">
+            <span class="summary-label">Duration</span>
+            <span class="summary-value">{{ "%.1f" | format(duration) }}s</span>
+        </div>
+    </div>
+    {% if errors %}
+    <div class="summary-errors">
+        <strong>{{ errors | length }} instance(s) failed:</strong>
+        <ul>
+            {% for err in errors %}
+            <li>{{ err }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>

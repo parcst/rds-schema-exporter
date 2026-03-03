@@ -104,6 +104,49 @@ class TestGetLoggedInUser:
         with pytest.raises(RuntimeError, match="Could not determine Teleport username"):
             get_logged_in_user("/usr/bin/tsh")
 
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_exit_code_1_still_works(self, mock_run):
+        """tsh status returns exit code 1 even when logged in — must not crash."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=json.dumps({"active": {"username": "alice@example.com"}}),
+        )
+        assert get_logged_in_user("/usr/bin/tsh") == "alice@example.com"
+        # Verify check=True is NOT used
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        assert call_kwargs.kwargs.get("check") is not True
+
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_cluster_specific_active(self, mock_run):
+        """Returns username when active profile matches requested cluster."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({
+                "active": {"username": "alice@example.com", "cluster": "prod"},
+                "profiles": [],
+            }),
+        )
+        assert get_logged_in_user("/usr/bin/tsh", cluster="prod") == "alice@example.com"
+
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_cluster_specific_from_profiles(self, mock_run):
+        """Falls back to profiles when active doesn't match requested cluster."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({
+                "active": {"username": "alice@example.com", "cluster": "prod"},
+                "profiles": [
+                    {"username": "alice@example.com", "cluster": "staging"},
+                ],
+            }),
+        )
+        assert get_logged_in_user("/usr/bin/tsh", cluster="staging") == "alice@example.com"
+
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_empty_stdout(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="")
+        with pytest.raises(RuntimeError, match="Could not determine Teleport username"):
+            get_logged_in_user("/usr/bin/tsh")
+
 
 # ---------------------------------------------------------------------------
 # list_mysql_databases
@@ -161,6 +204,15 @@ class TestListMysqlDatabases:
         assert result[0]["region"] == "us-east-1"
         assert result[0]["instance_id"] == "prod-mysql"
         assert result[1]["name"] == "staging-mysql"
+
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_uses_proxy_flag(self, mock_run):
+        """Must use --proxy= (not --cluster=) for non-active profiles."""
+        mock_run.return_value = MagicMock(stdout=json.dumps(_SAMPLE_DB_LS))
+        list_mysql_databases("/usr/bin/tsh", "prod.teleport.sh")
+        cmd = mock_run.call_args[0][0]
+        assert "--proxy=prod.teleport.sh" in cmd
+        assert not any(arg.startswith("--cluster=") for arg in cmd)
 
     @patch("rds_schema_exporter.teleport.subprocess.run")
     def test_no_mysql_databases(self, mock_run):
@@ -233,11 +285,36 @@ class TestStartTunnel:
         assert tunnel.db_user == "alice@example.com"
         assert tunnel.process is mock_proc
 
-        # Verify db login was called
+        # Verify db login was called (no cluster args)
         mock_run.assert_called_once_with(
             ["/usr/bin/tsh", "db", "login", "my-db", "--db-user=alice@example.com"],
             check=True,
+            capture_output=True,
         )
+
+    @patch("rds_schema_exporter.teleport.subprocess.Popen")
+    @patch("rds_schema_exporter.teleport.subprocess.run")
+    def test_start_tunnel_with_cluster(self, mock_run, mock_popen):
+        """Passes --proxy=<cluster> to both db login and proxy db."""
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.side_effect = [
+            "Listening on 127.0.0.1:54321\n",
+        ]
+        mock_popen.return_value = mock_proc
+
+        tunnel = start_tunnel(
+            "/usr/bin/tsh", "my-db", "alice@example.com", cluster="prod.teleport.sh"
+        )
+
+        assert tunnel.port == 54321
+
+        # Verify db login includes --proxy
+        login_cmd = mock_run.call_args[0][0]
+        assert "--proxy=prod.teleport.sh" in login_cmd
+
+        # Verify proxy db includes --proxy
+        popen_cmd = mock_popen.call_args[0][0]
+        assert "--proxy=prod.teleport.sh" in popen_cmd
 
     def test_wait_for_port_timeout(self):
         mock_proc = MagicMock()

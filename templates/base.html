@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDS Schema Exporter</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-brand">
+            <div class="brand-icon">SE</div>
+            <div>
+                <h1>RDS Schema Exporter</h1>
+                <p class="header-subtitle">Export MySQL schema DDL from RDS instances</p>
+            </div>
+        </div>
+    </header>
+    <div class="layout">
+        {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

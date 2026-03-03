@@ -1,0 +1,29 @@
+connection:
+  host: "localhost"
+  port: 13306
+  user: ""        # Teleport handles auth; override if needed
+  password: ""
+
+output:
+  target: "local"           # "local" or "s3"
+  local_path: "~/SchemaDump"
+  s3_bucket: ""
+  s3_prefix: ""
+
+metadata:
+  account_id: ""            # auto-detected if blank
+  region: ""                # auto-detected if blank
+  instance_id: ""           # auto-detected if blank
+
+filtering:
+  exclude_databases: []     # e.g., ["sys", "performance_schema"]
+
+notifications:
+  slack_webhook_url: ""
+
+behavior:
+  strip_auto_increment: true
+  strip_definer: false      # future: strip DEFINER clauses from views/procs
+
+teleport:
+  tsh_path: ""              # auto-detected; override if tsh is in a non-standard location

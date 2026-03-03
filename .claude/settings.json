@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'CLAUDE.md may need updating — if you changed architecture, commands, key types, config structure, or pipeline flow, update CLAUDE.md to reflect the changes.'"
+          }
+        ]
+      }
+    ]
+  }
+}

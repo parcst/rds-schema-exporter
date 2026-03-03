@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rds-schema-exporter"
+version = "0.1.0"
+description = "Export MySQL schema DDL from RDS instances to local filesystem or S3"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.35.0",
+    "pymysql>=1.1.0",
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "moto[s3,sts]>=5.0",
+]
+
+[project.scripts]
+rds-schema-export = "rds_schema_exporter.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
